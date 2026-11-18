@@ -1,0 +1,74 @@
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+FROM ${PYTHON_IMAGE}
+
+# Optional build-only proxies, supplied with --build-arg; never use ENV.
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+
+# Build-only indexes: never export package credentials into the runtime image.
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG UV_DEFAULT_INDEX=https://pypi.org/simple
+ARG PIAGENT_VERSION=0.80.6
+ARG PIAGENT_SHA256=f7c383b3dbf336b97174249ef40baed86e295416af77a81ff5288ac17cb71839
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_LINK_MODE=copy \
+    MANAGED_AGENT_WORK_CONCURRENCY=500 \
+    MANAGED_AGENT_WORKDIR=/workspace \
+    MANAGED_AGENT_READY_FILE=/tmp/managed-agent-worker-ready \
+    MANAGED_AGENT_BACKEND=adk \
+    PIAGENT_BINARY=/opt/piagent/pi/pi \
+    PATH=/app/.venv/bin:$PATH
+
+WORKDIR /app
+COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
+# Runtime metadata must remain readable even with a restrictive host umask.
+COPY --chmod=0644 pyproject.toml uv.lock README.md LICENSE ./
+COPY veadk ./veadk
+COPY --chmod=0644 docker/managed-agents/verify_anthropic_sdk.py /tmp/verify_anthropic_sdk.py
+
+# Export pinned versions and hashes; an index override changes downloads,
+# never the locked dependency versions. No adjacent SDK wheel is needed.
+RUN --mount=type=cache,id=veadk-managed-agents-uv-python312,target=/root/.cache/uv,sharing=locked \
+    uv export --quiet --frozen --no-dev --extra sandbox --extra codex --extra dsh \
+      --no-emit-project --output-file /tmp/requirements.txt \
+    && uv venv /app/.venv \
+    && PIP_INDEX_URL="$PIP_INDEX_URL" UV_DEFAULT_INDEX="$UV_DEFAULT_INDEX" \
+       UV_INDEX_URL="$UV_DEFAULT_INDEX" \
+       uv pip install --python /app/.venv/bin/python --no-deps --require-hashes \
+       -r /tmp/requirements.txt \
+    && PIP_INDEX_URL="$PIP_INDEX_URL" UV_DEFAULT_INDEX="$UV_DEFAULT_INDEX" \
+       UV_INDEX_URL="$UV_DEFAULT_INDEX" \
+       uv pip install --python /app/.venv/bin/python --no-deps . \
+    && python /tmp/verify_anthropic_sdk.py \
+    && rm /tmp/requirements.txt /tmp/verify_anthropic_sdk.py \
+    && python -c "from veadk.runtime.managed_agents.dispatcher import EnvironmentWorkDispatcher; from anthropic.lib.tools.agent_toolset import beta_agent_toolset_20260401"
+
+# Install the same pinned Pi release used by the Pi example at build time.
+# No download, package installation or mutable CLI cache is needed at runtime.
+RUN PIAGENT_BINARY='' PIAGENT_INSTALL_DIR=/opt/piagent \
+    PIAGENT_BINARY_VERSION="$PIAGENT_VERSION" PIAGENT_BINARY_SHA256="$PIAGENT_SHA256" \
+    python -c "from veadk.runtime.piagent.installer import resolve_or_install_piagent_binary; resolve_or_install_piagent_binary()" \
+    && chmod -R a+rX /opt/piagent
+
+COPY --chmod=0755 docker/managed-agents/run-runtime.sh /app/run-runtime.sh
+COPY --chmod=0644 docker/managed-agents/configure-telemetry.py /app/configure-telemetry.py
+COPY --chmod=0755 docker/managed-agents/run-claimed.sh /opt/gem/run.sh
+RUN useradd --create-home --uid 10001 veadk \
+    && mkdir -p /workspace \
+    && chmod -R a+rX /app/veadk \
+    && chown veadk:veadk /workspace
+
+USER 10001:10001
+# Exercise the packaged filter before sitecustomize, as the actual runtime user.
+# A missing/unreadable file, nonzero exit or unexpected output fails the build.
+RUN --network=none telemetry_exports="$(env -i PATH="$PATH" OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 python -S /app/configure-telemetry.py)" \
+    && printf '%s\n' "$telemetry_exports" \
+    && test "$telemetry_exports" = "$(printf 'export OTEL_TRACES_EXPORTER=none\nexport OTEL_METRICS_EXPORTER=none\nexport OTEL_LOGS_EXPORTER=none')"
+# Validate the packaged fallback as the runtime user without network access or
+# the image's Pi environment hint. Platforms may supply their own environment.
+RUN --network=none env -u PIAGENT_BINARY -u PIAGENT_INSTALL_DIR \
+    python -c "import subprocess; from veadk.runtime.piagent.installer import resolve_or_install_piagent_binary; binary = resolve_or_install_piagent_binary(); assert binary == '/opt/piagent/pi/pi', binary; subprocess.run([binary, '--version'], check=True, timeout=15)"
+EXPOSE 8000
+CMD ["bash", "/app/run-runtime.sh"]

@@ -1,0 +1,80 @@
+name: Harness Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'docker/harness-runtime/**'
+      - 'veadk/cloud/**'
+      - 'veadk/agent.py'
+      - 'veadk/runner.py'
+      - 'veadk/memory/**'
+      - 'veadk/tools/builtin_tools/write_memory.py'
+      - 'tests/cloud/**'
+      - 'tests/runtime/test_harness_runtime_supervision.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/publish-harness-runtime.yaml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish both verified images to the VeADK registry
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHON_IMAGE: python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+      CR_URL: veadk-cn-beijing.cr.volces.com
+      CR_NAMESPACE: veadk
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+      - uses: docker/setup-buildx-action@v3
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nginx
+          uv sync --frozen --extra dev --extra harness-server --extra sandbox --extra codex --extra extensions
+      - name: Verify migrated service and process contracts
+        env:
+          RUN_NGINX_SMOKE: '1'
+        run: |
+          uv run --no-sync pytest tests/cloud/cli_harness docker/harness-runtime/test_runtime.py docker/harness-runtime/test_proxy.py tests/runtime/test_harness_runtime_supervision.py -p no:xdist -rs
+      - name: Build and accept both images from the same wheel
+        run: |
+          set -euo pipefail
+          for target in harness runtime; do
+            image="veadk-harness-${target}:${GITHUB_SHA}"
+            python3 docker/harness-runtime/build.py --target "$target" --python-image "$PYTHON_IMAGE" --tag "$image" --source-metadata-file "dist/harness/${target}-build.json"
+            HARNESS_E2E_IMAGE="$image" uv run --no-sync pytest docker/harness-runtime/test_image_e2e.py -p no:xdist -rs
+          done
+      - name: Publish verified images
+        if: github.event_name == 'workflow_dispatch' && inputs.publish && github.repository == 'volcengine/veadk-python'
+        env:
+          CR_USERNAME: ${{ secrets.VE_CR_USERNAME }}
+          CR_PASSWORD: ${{ secrets.VE_CR_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$CR_PASSWORD" | docker login "$CR_URL" -u "$CR_USERNAME" --password-stdin
+          for target in harness runtime; do
+            destination="$CR_URL/$CR_NAMESPACE/veadk-harness-${target}:${GITHUB_SHA}"
+            docker tag "veadk-harness-${target}:${GITHUB_SHA}" "$destination"
+            docker push "$destination"
+            docker image inspect --format '{{json .RepoDigests}}' "$destination" > "dist/harness/${target}-digests.json"
+          done
+      - name: Save wheel and build records
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-runtime-${{ github.sha }}
+          path: dist/harness/

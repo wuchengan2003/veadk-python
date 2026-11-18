@@ -1,0 +1,238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Harness cronjob completion event",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "const": "1"
+    },
+    "eventType": {
+      "const": "cronjob.completed"
+    },
+    "eventID": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "taskID": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{32}$"
+    },
+    "runID": {
+      "type": "string",
+      "pattern": "^[0-9]{13}-[a-f0-9]{20}$"
+    },
+    "taskName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "taskType": {
+      "enum": [
+        "once",
+        "cron"
+      ]
+    },
+    "schedule": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "once"
+            },
+            "timezone": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "type",
+            "timezone",
+            "at"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "cron"
+            },
+            "timezone": {
+              "type": "string"
+            },
+            "expression": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "timezone",
+            "expression"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "scheduledAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "nextRunAt": {
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "date-time"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "status": {
+      "enum": [
+        "succeeded",
+        "failed"
+      ]
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "output": {
+          "type": "string"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "output",
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "userID": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "userID"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "eventType",
+    "eventID",
+    "taskID",
+    "runID",
+    "taskName",
+    "taskType",
+    "schedule",
+    "scheduledAt",
+    "startedAt",
+    "completedAt",
+    "nextRunAt",
+    "status",
+    "result",
+    "target"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "succeeded"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "result": {
+            "properties": {
+              "error": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "result": {
+            "properties": {
+              "output": {
+                "const": ""
+              },
+              "error": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "taskType": {
+            "const": "once"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "schedule": {
+            "properties": {
+              "type": {
+                "const": "once"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "taskType": {
+            "const": "cron"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "schedule": {
+            "properties": {
+              "type": {
+                "const": "cron"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

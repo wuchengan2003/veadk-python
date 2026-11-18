@@ -1,0 +1,18 @@
+# Send only the wheel and its build/runtime inputs, including the normally ignored dist/.
+**
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!dist/
+!dist/harness/
+!dist/harness/*.whl
+!docker/
+!docker/harness-runtime/
+!docker/harness-runtime/Dockerfile
+!docker/harness-runtime/VERSION
+!docker/harness-runtime/verify_app.py
+!docker/harness-runtime/launch.py
+!docker/harness-runtime/supervise.py
+!docker/harness-runtime/nginx.conf
+!docker/harness-runtime/healthcheck.py

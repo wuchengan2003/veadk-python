@@ -72,6 +72,14 @@ dependencies = [
 veadk = "veadk.cli.cli:veadk"
 
 [project.optional-dependencies]
+harness-server = [
+    # The migrated server uses the 0.8.x AgentKit API with the target ADK range.
+    "agentkit-sdk-python>=0.8.9,<0.9",
+    "croniter>=6.2.4,<7",
+    "fastapi>=0.115,<1",
+    "starlette>=0.46,<2",
+    "uvicorn[standard]>=0.34,<1",
+]
 github-cicd = [
     "PyNaCl>=1.5.0", # Encrypt GitHub Actions secrets for Runtime delivery
 ]
